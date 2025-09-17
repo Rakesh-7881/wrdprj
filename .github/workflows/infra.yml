@@ -14,36 +14,34 @@ env:
 
 jobs:
   plan:
-    # run for non-main branches & PRs
+    # Run for feature branches and PRs, but not main
     if: ${{ github.ref != 'refs/heads/main' || github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # install OpenTofu CLI
+      # Install OpenTofu CLI
       - name: Set up OpenTofu
         uses: opentofu/setup-opentofu@v1
-        # installs `tofu` binary
 
-      # login to Azure (service principal from AZURE_CREDENTIALS)
+      # Login to Azure (using SP secret)
       - name: Login to Azure
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Init (backend) and Plan
+      - name: Init backend and Plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
-          # backend values
+          # backend values from secrets
+          TFSTATE_RG: ${{ secrets.AZURE_STATE_RG }}
           TFSTATE_SA: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
           TFSTATE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
-          TFSTATE_KEY: "plans/${{ github.sha }}.tfstate"
           AZURE_STORAGE_ACCESS_KEY: ${{ secrets.AZURE_STORAGE_ACCESS_KEY }}
+          TFSTATE_KEY: "plans/${{ github.sha }}.tfstate"
         run: |
           tofu init \
-            -backend-config="resource_group_name=${TFSTATE_RG:-tfstate-rg}" \
+            -backend-config="resource_group_name=${TFSTATE_RG}" \
             -backend-config="storage_account_name=${TFSTATE_SA}" \
             -backend-config="container_name=${TFSTATE_CONTAINER}" \
             -backend-config="key=${TFSTATE_KEY}" \
@@ -58,7 +56,7 @@ jobs:
           path: ${{ env.INFRA_DIR }}/plan.tfplan
 
   apply:
-    # run only on commits to main
+    # Run only on main branch
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     needs: plan
@@ -76,18 +74,4 @@ jobs:
       - name: Init and Apply
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          TFSTATE_SA: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
-          TFSTATE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
-          TFSTATE_KEY: "prod.tfstate"
-          AZURE_STORAGE_ACCESS_KEY: ${{ secrets.AZURE_STORAGE_ACCESS_KEY }}
-        run: |
-          tofu init \
-            -backend-config="resource_group_name=tfstate-rg" \
-            -backend-config="storage_account_name=${TFSTATE_SA}" \
-            -backend-config="container_name=${TFSTATE_CONTAINER}" \
-            -backend-config="key=${TFSTATE_KEY}" \
-            -backend-config="access_key=${AZURE_STORAGE_ACCESS_KEY}"
-
-          # optional: create plan and apply the exact plan
-          tofu plan -out=prod.tfplan
-          tofu apply -auto-approve prod.tfplan
+          TFSTATE_RG: ${{ secrets._
