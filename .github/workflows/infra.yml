@@ -1,0 +1,93 @@
+name: OpenTofu CI (Plan / Apply)
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+
+env:
+  INFRA_DIR: infra
+
+jobs:
+  plan:
+    # run for non-main branches & PRs
+    if: ${{ github.ref != 'refs/heads/main' || github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # install OpenTofu CLI
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        # installs `tofu` binary
+
+      # login to Azure (service principal from AZURE_CREDENTIALS)
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Init (backend) and Plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
+          # backend values
+          TFSTATE_SA: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          TFSTATE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
+          TFSTATE_KEY: "plans/${{ github.sha }}.tfstate"
+          AZURE_STORAGE_ACCESS_KEY: ${{ secrets.AZURE_STORAGE_ACCESS_KEY }}
+        run: |
+          tofu init \
+            -backend-config="resource_group_name=${TFSTATE_RG:-tfstate-rg}" \
+            -backend-config="storage_account_name=${TFSTATE_SA}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER}" \
+            -backend-config="key=${TFSTATE_KEY}" \
+            -backend-config="access_key=${AZURE_STORAGE_ACCESS_KEY}"
+
+          tofu plan -out=plan.tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ github.sha }}
+          path: ${{ env.INFRA_DIR }}/plan.tfplan
+
+  apply:
+    # run only on commits to main
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    needs: plan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Init and Apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          TFSTATE_SA: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          TFSTATE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
+          TFSTATE_KEY: "prod.tfstate"
+          AZURE_STORAGE_ACCESS_KEY: ${{ secrets.AZURE_STORAGE_ACCESS_KEY }}
+        run: |
+          tofu init \
+            -backend-config="resource_group_name=tfstate-rg" \
+            -backend-config="storage_account_name=${TFSTATE_SA}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER}" \
+            -backend-config="key=${TFSTATE_KEY}" \
+            -backend-config="access_key=${AZURE_STORAGE_ACCESS_KEY}"
+
+          # optional: create plan and apply the exact plan
+          tofu plan -out=prod.tfplan
+          tofu apply -auto-approve prod.tfplan
